@@ -456,6 +456,10 @@ Use this classification when cleaning or reviewing benchmark-related changes:
   provider-neutral capability contract.
 - Keep benchmark-native runners, adapters, ledgers, scoring reducers, and dated
   experiment packets outside the active product surface. Historical versions
-  belong under `deprecate/benchmark-legacy/` and are not part of active CI.
+  follow the canonical archive placement rules in `benchmark/README.md`:
+  retired implementations and dated packets belong under
+  `deprecate/benchmark-legacy/`; explicitly identified immutable experiment
+  snapshots may remain under `benchmark/` only under that document's conditions.
+  Neither category is part of active CI benchmark execution.
 - Add a new active benchmark smoke only when it protects a stable toolkit
   behavior; experiment-specific validation belongs with the research workspace.
