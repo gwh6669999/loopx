@@ -18,6 +18,33 @@ raw verifier artifacts are not included here; the reported results below are
 preserved from the v1 summary and have not been independently reproduced by this
 publication change.
 
+Set `MR_PYTHON` to the interpreter containing the Pier dependencies (defaults to
+`python3`). Both launchers require `MR_MODELONLY_COMPOSE` to name an existing
+external Docker Compose overlay defining the model-only network. Its gateway
+must be reachable from the task containers; loopback placeholders are not a
+portable network configuration. Supply the overlay and gateway configuration
+for your environment before launching.
+
+The remaining-59 launcher accepts `MR_TASK_LIST` (defaults to `remaining59.txt`)
+and requires 59 unique task directory names, one per line. The 54-task launcher
+loads its external frozen subset modules and validates any explicit task subset.
+Each launcher passes a snapshot of its actual selected task ids to preflight;
+the admission receipt hashes those tasks' `upstream/tasks/<id>/task.toml` files.
+The evaluated LoopX revision is fixed and cannot be overridden by environment.
+All LoopX admissions finish before any arm starts; launcher failure is nonzero
+if admission or any arm fails.
+
+Publication fixes add the missing plain runner and harden launch/admission and
+profile initialization. Unsupported legacy `MR_CODEX_ARM=loopx` and Claude
+adapters are excluded from this five-arm package. These fixes do not constitute
+a rerun or revalidation of the historical results.
+
+Retry decisions use structured provider status/code fields; unknown prose-only
+errors now fail instead of being classified by substring. A terminal Todo with
+invalid delivery stops the Codex CLI runner with failure. Offline regression
+coverage can be run with
+`python3 -m pytest -q benchmark/deepswe-gptxhigh-v1/tests/` from the repository root.
+
 ## The five arms
 | Arm | Transport | Goal / LoopX | Continuation |
 |---|---|---|---|
@@ -28,7 +55,8 @@ publication change.
 | `ssh-goal` | codex app-server | LoopX + native Goal (official full path) | same thread/Goal; LoopX clears blocked + restarts turn |
 
 - Arm dispatch: `pier_cn.py` (`MR_CODEX_ARM=plain|goal|loopx-native|loopx-native-codex-cli|loopx-native-heartbeat`)
-- Arm classes: `goal_codex.py` (`PlainAppServerCodex`, `GoalCodex`, `LoopxCodex`)
+- Arm classes: `goal_codex.py` (`PlainAppServerCodex`, `GoalCodex`) and
+  `loopx_native_codex.py` (the three LoopX variants)
 - Runners: `loopx_wen_native_runner.py` (ssh-goal), `loopx_codex_cli_runner.py` (codex-cli),
   `loopx_heartbeat_supervisor.py` (heartbeat)
 - Delivery gate: `workspace_delivery.py` (recover agent work from linked git worktrees into
