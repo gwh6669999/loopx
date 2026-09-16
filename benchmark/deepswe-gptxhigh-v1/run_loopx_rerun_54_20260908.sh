@@ -4,6 +4,10 @@ set -euo pipefail
 trap 'exit 130' INT TERM
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$DIR"
+PY="${MR_PYTHON:-python3}"
+: "${MR_MODELONLY_COMPOSE:?set MR_MODELONLY_COMPOSE to the model-only compose overlay}"
+[[ -f "$MR_MODELONLY_COMPOSE" ]] || { echo "missing model-only compose overlay" >&2; exit 2; }
 MODE="${1:-all}"
 shift $(( $# > 0 ? 1 : 0 ))
 
@@ -26,9 +30,9 @@ LOOPX_ROOT="${MR_LOOPX_ROOT:-$DIR/../loopx-official-latest}"
 LOOPX_REVISION="$(git -C "$LOOPX_ROOT" rev-parse --verify HEAD)"
 LOOPX_REVISION_SHORT="${LOOPX_REVISION:0:12}"
 
-mapfile -t ALL_TASKS < <(
+ALL_TASK_TEXT="$(
   cd "$DIR"
-  python3 - <<'PY'
+  "$PY" - <<'PY'
 from goal30_subset import SUBSET
 from hard24_subset import HARD_SUBSET
 from remaining4_subset import REMAINING_SUBSET
@@ -38,7 +42,9 @@ if len(tasks) != 54:
     raise SystemExit(f"expected 54 tasks, got {len(tasks)}")
 print("\n".join(tasks))
 PY
-)
+)"
+mapfile -t ALL_TASKS <<< "$ALL_TASK_TEXT"
+(( ${#ALL_TASKS[@]} == 54 )) || { echo "expected 54 tasks" >&2; exit 2; }
 
 if (( $# )); then
   TASKS=("$@")
@@ -52,6 +58,16 @@ if (( $# )); then
 else
   TASKS=("${ALL_TASKS[@]}")
 fi
+
+TASK_LIST="$(mktemp)"
+trap 'rm -f "$TASK_LIST"' EXIT
+printf '%s\n' "${TASKS[@]}" > "$TASK_LIST"
+"$PY" - "$TASK_LIST" "${#TASKS[@]}" <<'PY'
+import sys
+from pathlib import Path
+from preflight_loopx_rerun import load_task_list
+load_task_list(Path(sys.argv[1]), int(sys.argv[2]))
+PY
 
 port_for() {
   case "$1" in
@@ -88,12 +104,13 @@ preflight_arm() {
   fi
 
   mkdir -p "$jobs" "$LOG_ROOT"
-  "$DIR/.venv-user-395647/bin/python" "$DIR/preflight_loopx_rerun.py" \
+  "$PY" "$DIR/preflight_loopx_rerun.py" \
     --arm "$arm_mode" --loopx-root "$LOOPX_ROOT" --port "$port" \
     --model "$MODEL" --effort "$EFFORT" --goal-timeout "$GOAL_TIMEOUT" \
     --heartbeat-segment-timeout "$HEARTBEAT_SEGMENT_TIMEOUT" \
     --turn-idle-timeout "$TURN_IDLE_TIMEOUT" \
     --agent-timeout-multiplier "$AGENT_TIMEOUT_MULTIPLIER" \
+    --task-list "$TASK_LIST" --expected-task-count "${#TASKS[@]}" \
     --output "$LOG_ROOT/admission-$arm_mode.json"
 }
 
@@ -134,7 +151,7 @@ if [[ "$MODE" == all ]]; then
   for arm_mode in ssh-goal codex-cli heartbeat; do
     preflight_arm "$arm_mode"
   done
-  "$DIR/.venv-user-395647/bin/python" - "$LOG_ROOT" <<'PY'
+  "$PY" - "$LOG_ROOT" <<'PY'
 import json
 import sys
 from pathlib import Path

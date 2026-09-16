@@ -13,6 +13,7 @@ import json
 import os
 import subprocess
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -104,7 +105,45 @@ def _clear_blocked(
         raise NativeGoalProtocolError(f"blocked_recovery_failed:{detail}")
 
 
-def _terminal_error(event: Mapping[str, Any]) -> str | None:
+@dataclass(frozen=True)
+class ModelFailure:
+    message: str
+    retryable: bool
+
+
+def classify_model_error(error: Any) -> ModelFailure:
+    # Unknown/unstructured failures fail closed; prose is not a retry contract.
+    if not isinstance(error, Mapping):
+        return ModelFailure(str(error), False)
+    message = str(error.get("message") or error.get("type") or error)
+    code = error.get("code") or error.get("type")
+    status = error.get("status") or error.get("status_code") or error.get("httpStatusCode")
+    info = error.get("codexErrorInfo")
+    if isinstance(info, Mapping):
+        code = next(iter(info), code)
+        details = info.get(code)
+        if isinstance(details, Mapping):
+            status = details.get("httpStatusCode", status)
+    elif isinstance(info, str):
+        code = info
+    code = str(code or "")
+    if code in {"insufficient_quota", "deployment_disabled", "invalid_api_key", "authentication_error", "permission_denied"}:
+        return ModelFailure(message, False)
+    try:
+        status = int(status)
+    except (TypeError, ValueError):
+        status = None
+    if status is not None:
+        return ModelFailure(message, status in {408, 429, 500, 502, 503, 504})
+    retryable = code in {
+        "rate_limit_exceeded", "overloaded", "server_error", "request_timeout",
+        "temporarily_unavailable", "httpConnectionFailed", "responseStreamConnectionFailed",
+        "responseStreamDisconnected", "responseTooManyFailedAttempts",
+    }
+    return ModelFailure(message, retryable)
+
+
+def _terminal_error(event: Mapping[str, Any]) -> ModelFailure | None:
     method = str(event.get("method") or "")
     params = event.get("params") if isinstance(event.get("params"), Mapping) else {}
     event_type = str(event.get("type") or "")
@@ -120,9 +159,7 @@ def _terminal_error(event: Mapping[str, Any]) -> str | None:
         error = container.get("error") if isinstance(container, Mapping) else None
         if error is None:
             continue
-        if isinstance(error, Mapping):
-            return str(error.get("message") or error.get("type") or error)
-        return str(error)
+        return classify_model_error(error)
     return None
 
 
@@ -134,8 +171,8 @@ def _wait_turn(
     completed_before: int,
     idle_timeout_seconds: float,
     interrupt_grace_seconds: float,
-) -> str | None:
-    error: str | None = None
+) -> ModelFailure | None:
+    error: ModelFailure | None = None
     last_event_at = time.monotonic()
     interrupt_deadline: float | None = None
     while turn.turn_completed_count <= completed_before:
@@ -159,25 +196,10 @@ def _wait_turn(
                 "turn/interrupt",
                 {"threadId": turn.thread_id, "turnId": turn.turn_id},
             )
-            error = f"turn idle timeout after {idle_timeout_seconds:g} seconds"
+            error = ModelFailure(f"turn idle timeout after {idle_timeout_seconds:g} seconds", True)
             interrupt_deadline = min(deadline, now + interrupt_grace_seconds)
     return error
 
-
-def _is_transient_model_error(message: str) -> bool:
-    lowered = message.lower()
-    return any(
-        marker in lowered
-        for marker in (
-            "rate limit",
-            "overloaded",
-            "server error",
-            "timed out",
-            "timeout",
-            "deployment_disabled",
-            "insufficient quota available",
-        )
-    )
 
 
 def _benchmark_todo_terminal(args: argparse.Namespace, project: Path) -> bool:
@@ -283,11 +305,11 @@ def run_goal(args: argparse.Namespace):
             )
             completed_before = turn.turn_completed_count
             if turn_error is not None:
-                if not _is_transient_model_error(turn_error):
-                    raise NativeGoalProtocolError(f"non_transient_model_error:{turn_error}")
+                if not turn_error.retryable:
+                    raise NativeGoalProtocolError(f"non_transient_model_error:{turn_error.message}")
                 if transient_retries >= args.max_transient_retries:
                     raise NativeGoalProtocolError(
-                        f"transient_model_retries_exhausted:{turn_error}"
+                        f"transient_model_retries_exhausted:{turn_error.message}"
                     )
                 transient_retries += 1
                 delay = min(

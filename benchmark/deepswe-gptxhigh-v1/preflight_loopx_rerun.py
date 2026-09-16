@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import re
 import socket
 import subprocess
@@ -16,22 +15,16 @@ import tomllib
 from datetime import datetime, timezone
 from pathlib import Path
 
-from goal30_subset import SUBSET
-from hard24_subset import HARD_SUBSET
-from remaining4_subset import REMAINING_SUBSET
 from workspace_delivery import head_sha, normalize_delivery
 
 
-TASKS = tuple(dict.fromkeys((*SUBSET, *HARD_SUBSET, *REMAINING_SUBSET)))
 EXPECTED_MODEL = "openai/gpt-5.6-sol"
 EXPECTED_EFFORT = "xhigh"
 EXPECTED_AGENT_TIMEOUT_MULTIPLIER = 3.0
 EXPECTED_GOAL_TIMEOUT_SECONDS = 14400.0
 EXPECTED_HEARTBEAT_SEGMENT_TIMEOUT_SECONDS = 7200.0
 EXPECTED_TURN_IDLE_TIMEOUT_SECONDS = 7200.0
-EXPECTED_LOOPX_REVISION = os.environ.get(
-    "MR_EXPECTED_LOOPX_REVISION", "2cef51d08b2a0103f4ba026bf47fd70dc8acee30"
-)
+EXPECTED_LOOPX_REVISION = "2cef51d08b2a0103f4ba026bf47fd70dc8acee30"
 RUNNERS = {
     "ssh-goal": {
         "file": "loopx_wen_native_runner.py",
@@ -108,19 +101,34 @@ def port_is_free(port: int) -> bool:
     return True
 
 
-def task_manifest(task_root: Path) -> tuple[str, float, list[str]]:
+def load_task_list(path: Path, expected_count: int) -> tuple[str, ...]:
+    tasks = tuple(path.read_text(encoding="utf-8").splitlines())
+    if expected_count <= 0 or len(tasks) != expected_count:
+        raise ValueError(f"expected {expected_count} task ids, got {len(tasks)}")
+    if len(set(tasks)) != len(tasks):
+        raise ValueError("duplicate task ids")
+    if any(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", task) is None for task in tasks):
+        raise ValueError("invalid task id: expected a single directory name per line")
+    return tasks
+
+
+def task_manifest(task_root: Path, tasks: tuple[str, ...]) -> tuple[str, float, list[str]]:
     entries = []
     timeouts = []
     missing = []
-    for task in TASKS:
+    for task in tasks:
         path = task_root / task / "task.toml"
         if not path.is_file():
             missing.append(task)
             continue
-        raw = path.read_bytes()
-        data = tomllib.loads(raw.decode("utf-8"))
-        base = str(data.get("metadata", {}).get("base_commit_hash") or "")
-        timeout = float(data.get("agent", {}).get("timeout_sec") or 0)
+        try:
+            raw = path.read_bytes()
+            data = tomllib.loads(raw.decode("utf-8"))
+            base = str(data.get("metadata", {}).get("base_commit_hash") or "")
+            timeout = float(data.get("agent", {}).get("timeout_sec") or 0)
+        except (OSError, ValueError, TypeError, AttributeError):
+            missing.append(task)
+            continue
         if re.fullmatch(r"[0-9a-fA-F]{7,40}", base) is None or timeout <= 0:
             missing.append(task)
             continue
@@ -142,6 +150,8 @@ def main() -> int:
     parser.add_argument("--turn-idle-timeout", type=float, required=True)
     parser.add_argument("--agent-timeout-multiplier", type=float, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--task-list", type=Path, required=True)
+    parser.add_argument("--expected-task-count", type=int, required=True)
     args = parser.parse_args()
 
     root = Path(__file__).resolve().parent
@@ -155,7 +165,11 @@ def main() -> int:
     wrapper = root / "codex_nosandbox_wrapper.py"
     harness = root / "goal_codex.py"
     task_root = root / "upstream" / "tasks"
-    manifest_sha256, minimum_agent_timeout, malformed_tasks = task_manifest(task_root)
+    try:
+        tasks = load_task_list(args.task_list, args.expected_task_count)
+    except (OSError, ValueError) as exc:
+        parser.error(str(exc))
+    manifest_sha256, minimum_agent_timeout, malformed_tasks = task_manifest(task_root, tasks)
     if args.port in {4141, 4250}:
         errors.append("prohibited_gateway_port")
     if not port_is_free(args.port):
@@ -223,8 +237,6 @@ def main() -> int:
     delivery_probe_ok, delivery_probe_detail = delivery_self_test()
     if not delivery_probe_ok:
         errors.append("delivery_self_test_failed")
-    if len(TASKS) != 54 or len(set(TASKS)) != 54:
-        errors.append("task_set_not_54_unique")
     if malformed_tasks:
         errors.append("missing_or_malformed_task_definitions")
     git = subprocess.run(
@@ -266,7 +278,8 @@ def main() -> int:
         "turn_idle_timeout_seconds": args.turn_idle_timeout,
         "agent_timeout_multiplier": args.agent_timeout_multiplier,
         "minimum_native_agent_timeout_seconds": minimum_agent_timeout,
-        "task_count": len(TASKS),
+        "task_count": len(tasks),
+        "task_ids": tasks,
         "task_manifest_sha256": manifest_sha256,
         "missing_or_malformed_tasks": malformed_tasks,
         "gateway_port": args.port,

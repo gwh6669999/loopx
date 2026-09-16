@@ -155,10 +155,8 @@ def patch_harnesses() -> None:
             if not changed:
                 # Pier changed its install script out from under the patch: say
                 # so rather than let a sweep crawl or die one task at a time.
-                print(
-                    f"pier_cn: WARNING — no install step of {_name} matched; its "
-                    "build will use upstream's GitHub/PyPI/npm path and may hang.",
-                    file=sys.stderr,
+                raise RuntimeError(
+                    f"pier_cn: no install step of {_name} matched; refusing an unpatched harness"
                 )
             return spec
 
@@ -182,7 +180,6 @@ def patch_goal_mode() -> None:
         MR_CODEX_ARM=goal    Goal attached over the app-server (treatment)
         MR_CODEX_ARM=plain   same objective text and web_search setting, but
                              app-server transport with no Goal (control)
-        MR_CODEX_ARM=loopx   Codex driven by LoopX's governed Turn loop
         MR_CODEX_ARM=loopx-native
                              LoopX through its own product path: formal release
                              install, LoopX-rendered Goal body, and continuation
@@ -219,11 +216,11 @@ def patch_goal_mode() -> None:
         arm = "goal"
     if not arm:
         return
-    if arm not in ("goal", "plain", "loopx", "loopx-native", "loopx-native-deepseek",
+    if arm not in ("goal", "plain", "loopx-native", "loopx-native-deepseek",
                   "loopx-native-deepseek-flash", "loopx-native-codex-cli",
                   "loopx-native-heartbeat"):
         raise SystemExit(
-            "pier_cn: MR_CODEX_ARM must be 'goal', 'plain', 'loopx', 'loopx-native', "
+            "pier_cn: MR_CODEX_ARM must be 'goal', 'plain', 'loopx-native', "
             "'loopx-native-deepseek', 'loopx-native-deepseek-flash', "
             "'loopx-native-codex-cli' or 'loopx-native-heartbeat', "
             f"got {arm!r}"
@@ -256,7 +253,6 @@ def patch_goal_mode() -> None:
         agent = {
             "goal": goal_codex.GoalCodex,
             "plain": goal_codex.PlainAppServerCodex,
-            "loopx": goal_codex.LoopxCodex,
         }[arm]
     AgentFactory._AGENT_MAP[AgentName.CODEX] = agent
     print(
@@ -266,43 +262,9 @@ def patch_goal_mode() -> None:
 
 
 def patch_claude_arm() -> None:
-    """Point the ``claude-code`` agent name at one of its two arms.
-
-    The same rebinding trick as ``patch_goal_mode``, on a separate environment
-    variable so the two agent families stay independent: a sweep can run the
-    Codex arms and the Claude Code arms without either one's setting leaking
-    into the other.
-
-        MR_CLAUDE_ARM=plain   stock `claude --print`, plus the objective text
-                              that the LoopX arm necessarily carries (control)
-        MR_CLAUDE_ARM=loopx   Claude Code driven by LoopX's governed Turn loop
-
-    There is no ``goal`` arm here: Claude Code's native `/loop` is interactive
-    and has no `--print` entry point, so it cannot be exercised inside Pier's
-    one-shot container invocation. Unset, an ordinary sweep is untouched.
-    """
-    arm = os.environ.get("MR_CLAUDE_ARM", "").strip().lower()
-    if not arm:
-        return
-    if arm not in ("plain", "loopx"):
-        raise SystemExit(
-            f"pier_cn: MR_CLAUDE_ARM must be 'plain' or 'loopx', got {arm!r}"
-        )
-
-    from pier.agents.factory import AgentFactory
-    from pier.models.agent.name import AgentName
-
-    import goal_claude
-
-    agent = {
-        "plain": goal_claude.PlainClaudeCode,
-        "loopx": goal_claude.LoopxClaudeCode,
-    }[arm]
-    AgentFactory._AGENT_MAP[AgentName.CLAUDE_CODE] = agent
-    print(
-        f"pier_cn: MR_CLAUDE_ARM={arm} — 'claude-code' now runs as {agent.__qualname__}",
-        file=sys.stderr,
-    )
+    """Reject unsupported Claude arms before starting this Codex study."""
+    if os.environ.get("MR_CLAUDE_ARM", "").strip():
+        raise SystemExit("pier_cn: Claude arms are not part of this five-arm snapshot")
 
 
 def patch_modelonly_network() -> None:
@@ -343,8 +305,11 @@ def patch_modelonly_network() -> None:
             file=sys.stderr,
         )
 
-    overlay = Path(__file__).resolve().with_name("docker-compose-modelonly.yaml")
-    if not overlay.exists():
+    overlay_path = os.environ.get("MR_MODELONLY_COMPOSE", "").strip()
+    if not overlay_path:
+        raise SystemExit("pier_cn: set MR_MODELONLY_COMPOSE to an external model-only compose overlay")
+    overlay = Path(overlay_path).expanduser().resolve()
+    if not overlay.is_file():
         raise SystemExit(f"pier_cn: missing model-only compose overlay: {overlay}")
     original = DockerEnvironment._docker_compose_paths
     if getattr(original, "_deepswe_modelonly", False):

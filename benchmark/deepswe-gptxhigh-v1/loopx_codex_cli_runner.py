@@ -222,6 +222,12 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
                     "task_correctness_authority": "independent_verifier",
                 }
                 return result, 0
+            receipts.append({
+                "segment": segment,
+                "status": "terminal_todo_without_valid_delivery",
+                "delivery": delivery,
+            })
+            break
         if not claim.get("ok"):
             receipts.append({
                 "segment": segment,

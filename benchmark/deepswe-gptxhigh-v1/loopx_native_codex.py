@@ -62,6 +62,7 @@ Environment:
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import shlex
@@ -122,11 +123,15 @@ def build_host_profile(loopx_root: str = _LOOPX_ROOT,
         install_native_codex_profile,
     )
 
-    target = Path(profile_root)
-    if target.exists() and any(target.iterdir()):
-        profile = inspect_native_codex_profile(target, source_root=loopx_root)
-    else:
-        profile = install_native_codex_profile(loopx_root, target)
+    target = Path(profile_root).resolve()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    # The sibling lock survives installation and serializes independent workers.
+    with target.with_name(target.name + ".lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if target.exists() and any(target.iterdir()):
+            profile = inspect_native_codex_profile(target, source_root=loopx_root)
+        else:
+            profile = install_native_codex_profile(loopx_root, target)
     return compact_native_codex_profile_receipt(profile)
 
 

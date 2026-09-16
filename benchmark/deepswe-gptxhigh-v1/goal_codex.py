@@ -47,7 +47,6 @@ from __future__ import annotations
 
 import os
 import shlex
-import subprocess
 import tempfile
 from pathlib import Path
 
@@ -59,7 +58,6 @@ from pier.models.trial.paths import EnvironmentPaths
 _CODEX_EXEC_MARKER = "codex exec "
 
 _REMOTE_DIR = "/tmp/loopx-goal"
-_LOOPX_MOUNT = "/opt/loopx"
 _DEFAULT_LOOPX_ROOT = str(
     Path(__file__).resolve().parents[1] / "wen" / "loopx"
 )
@@ -153,142 +151,6 @@ class PlainCodex(Codex):
         return await super().exec_as_agent(
             environment, command=command, env=env, **kwargs
         )
-
-
-class LoopxCodex(Codex):
-    """The third arm: Codex driven by LoopX's governed Turn loop.
-
-    The other two arms both stop when the model says it is finished — `codex
-    exec` exits, and the Goal API marked every one of 53 runs complete on the
-    first turn.  LoopX is the only arm where something other than the model
-    decides: it runs one Turn, requires an independent validator to prove the
-    postcondition, and only then commits and spends quota.  Turn two happens
-    because the controller asks for it.
-
-    Everything else is held to the other arms: same model, same disabled
-    web_search, same bypassed sandbox, same task set.  The staged Todo text
-    mirrors the four-stage objective already tested on the Goal arm, where it
-    did not produce a single continuation — so any multi-turn behaviour here is
-    attributable to the loop rather than to the wording.
-
-    LoopX is bind-mounted rather than installed: it declares no runtime
-    dependencies, and a read-only mount cannot drift between tasks the way 54
-    separate installs could.
-
-    Sandbox is ``workspace-write`` rather than the bypass the other two arms
-    use, because LoopX rejects anything else in two places — the argparse
-    choices and again in the driver ("Codex CLI sandbox must be read-only or
-    workspace-write").  Whether Codex can actually execute under it inside
-    these containers is the thing this arm has to establish first: the app-
-    server path could not, but that is a different code path from
-    ``codex exec --sandbox``, and assuming they behave alike is what a smoke
-    test is for.  If it works, the other two arms should move to the same value
-    so permissions stop being a second difference between the arms.
-    """
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._loopx_instruction: str | None = None
-        self._loopx_swapped = False
-
-    async def run(self, instruction, environment, context):  # type: ignore[override]
-        self._loopx_instruction = instruction
-        self._loopx_swapped = False
-        try:
-            return await super().run(instruction, environment, context)
-        finally:
-            if not self._loopx_swapped:
-                raise RuntimeError(
-                    "LoopxCodex never intercepted a `codex exec` command — this "
-                    "run would have been plain Codex with no LoopX loop."
-                )
-
-    async def exec_as_agent(self, environment, command: str = "", env=None, **kwargs):  # type: ignore[override]
-        if _CODEX_EXEC_MARKER not in command:
-            return await super().exec_as_agent(
-                environment, command=command, env=env, **kwargs
-            )
-
-        self._loopx_swapped = True
-        model = self._command_model_name or (self.model_name or "").split("/")[-1]
-
-        loopx_root = Path(os.environ.get("MR_LOOPX_ROOT", _DEFAULT_LOOPX_ROOT))
-        if not (loopx_root / "loopx" / "__init__.py").is_file():
-            raise FileNotFoundError(f"LoopX package not found under {loopx_root}")
-        runner_src = Path(__file__).resolve().parent / "loopx_turn_runner.py"
-
-        await super().exec_as_agent(
-            environment, command=f"mkdir -p {shlex.quote(_REMOTE_DIR)}", env=env
-        )
-        await super().exec_as_agent(environment, command=_WEB_SEARCH_OFF, env=env)
-
-        # LoopX arrives as one tarball rather than a bind mount: the container is
-        # created by Pier from its own compose file, so an agent cannot add a
-        # mount to it, and uploading 710 files one at a time is not a serious
-        # option.  Packed once per run rather than once per task would be nicer
-        # still, but the tar is ~13 MB and building it is far cheaper than the
-        # model turn that follows.
-        runner_source = getattr(self, "_goal_runner_source", None)
-        with tempfile.TemporaryDirectory() as tmp:
-            tarball = Path(tmp) / "loopx.tar.gz"
-            subprocess.run(
-                ["tar", "czf", str(tarball), "-C", str(loopx_root), "loopx"],
-                check=True,
-            )
-            task_path = Path(tmp) / "task.txt"
-            task_path.write_text(self._loopx_instruction or "", encoding="utf-8")
-            for local, remote in (
-                (tarball, f"{_REMOTE_DIR}/loopx.tar.gz"),
-                (task_path, f"{_REMOTE_DIR}/task.txt"),
-                (runner_src, f"{_REMOTE_DIR}/loopx_turn_runner.py"),
-                (runner_src.parent / "codex_nosandbox_wrapper.py",
-                 f"{_REMOTE_DIR}/codex_nosandbox_wrapper.py"),
-            ):
-                await environment.upload_file(str(local), remote)
-
-        if environment.default_user is not None:
-            await self.exec_as_root(
-                environment,
-                command=f"chown -R {environment.default_user} {shlex.quote(_REMOTE_DIR)} && chmod +x {shlex.quote(_REMOTE_DIR)}/codex_nosandbox_wrapper.py",
-            )
-        await super().exec_as_agent(
-            environment,
-            command=(
-                f"mkdir -p {shlex.quote(_LOOPX_MOUNT)} && "
-                f"tar xzf {shlex.quote(_REMOTE_DIR)}/loopx.tar.gz "
-                f"-C {shlex.quote(_LOOPX_MOUNT)} && "
-                f"python3 -c 'import sys; sys.path.insert(0, \"{_LOOPX_MOUNT}\"); "
-                "import loopx.cli_commands.turn'"
-            ),
-            env=env,
-        )
-
-        args = [
-            "python3",
-            f"{_REMOTE_DIR}/loopx_turn_runner.py",
-            "--project", "__PWD__",
-            "--task-file", f"{_REMOTE_DIR}/task.txt",
-            "--runtime-root", f"{_REMOTE_DIR}/runtime",
-            "--codex-bin", "codex",
-            "--model", model,
-            "--sandbox", os.environ.get("MR_LOOPX_SANDBOX", "workspace-write"),
-            "--quota", os.environ.get("MR_LOOPX_QUOTA", "4"),
-        ]
-        rendered = shlex.join(args).replace("'__PWD__'", '"$(pwd)"').replace(
-            "__PWD__", '"$(pwd)"'
-        )
-        output = (EnvironmentPaths.agent_dir / "loopx-turns.json").as_posix()
-        return await super().exec_as_agent(
-            environment,
-            command=(
-                "if [ -s ~/.nvm/nvm.sh ]; then . ~/.nvm/nvm.sh; fi; "
-                f"PYTHONPATH={shlex.quote(_LOOPX_MOUNT)} {rendered} "
-                f"2>&1 </dev/null | tee {shlex.quote(output)}"
-            ),
-            env=env,
-        )
-
-
 class GoalCodex(Codex):
     """Codex with its native Goal loop actually running."""
 
