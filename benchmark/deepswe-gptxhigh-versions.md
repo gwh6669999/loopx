@@ -1,70 +1,94 @@
-# DeepSWE GPT xhigh Version Boundaries
+# DeepSWE GPT xhigh v1 Archive
 
-The original v1 archive and subsequent execution fixes are separate packages.
-No execution fix is applied to the original snapshot.
+This PR publishes only the original v1 code and historical result summary in
+[deepswe-gptxhigh-v1](deepswe-gptxhigh-v1/README.md). The revised execution package
+has been removed from this PR. No later admission, retry, gateway, concurrency,
+or termination changes are applied to v1.
 
-| Directory | Purpose | Results |
-| --- | --- | --- |
-| [deepswe-gptxhigh-v1](deepswe-gptxhigh-v1/README.md) | Original 14-file sanitized snapshot, unchanged contents and file modes | Original historical summary only |
-| [deepswe-gptxhigh-v1-revised](deepswe-gptxhigh-v1-revised/README.md) | Later execution fixes and offline regression tests | No benchmark results; not rerun or validated end to end |
+## Snapshot Identity
 
-## Original Snapshot Provenance
+The 14 files come from commit `98c262a8487ff5688d38091f603a87f7e2a78c64`,
+subtree `benchmark/deepswe-five-arm/`. Only the containing directory name
+changes. Contents and executable modes, including the original README, match
+Git tree `1bc5d2b3b74761a97d34ba3f3612e977fd610340`.
 
-The original directory is copied from commit
-`98c262a8487ff5688d38091f603a87f7e2a78c64`, subtree
-`benchmark/deepswe-five-arm/`. Only the containing directory name changes.
-The complete original tree object is
-`1bc5d2b3b74761a97d34ba3f3612e977fd610340`.
+The evaluated LoopX revision was `2cef51d`. The original README's references to
+"this branch's base" and an in-progress v2 are historical text, not current
+project status. No new benchmark results are included here.
 
-Verify the snapshot in Git:
+## Executability Checks
+
+From the repository root, with Python 3.11+ and Bash installed:
 
 ```sh
-test "$(git rev-parse HEAD:benchmark/deepswe-gptxhigh-v1)" = \
-  1bc5d2b3b74761a97d34ba3f3612e977fd610340
+python3 benchmark/check_deepswe_v1.py
 ```
 
-This verifies file names, executable modes, and exact contents, including the
-original README. Its references to "this branch's base" and an in-progress v2
-are historical text, not statements about the current PR or project status.
-The evaluated LoopX revision recorded by v1 is `2cef51d`.
+This read-only check verifies the archive's actual file bytes and modes, parses
+all Python files (including embedded runner/bootstrap programs), and runs
+`bash -n` on the launchers. It makes no model calls and does not run task code.
+Exit zero means those checks passed, **not that a complete benchmark ran**.
+The report explicitly records `standalone_runnable: false`.
 
-The archive preserves known defects: absent plain/Claude support files, legacy
-entry points, hard-coded environment dependencies, shared profile initialization
-races, stale task admission, and launcher/retry failure handling. Preservation
-does not make these behaviors correct or the package independently runnable.
-Do not patch the original to resolve review findings; apply execution changes
-to the revised directory and update its own tests.
+An additional local smoke imported the original adapters and dispatched all
+five arm selectors using Python 3.12.13 and `datacurve-pier` 0.3.1 with external
+experiment modules available. No agents were instantiated and no task/model
+execution was attempted. This is import/dispatch compatibility evidence only,
+not a full dependency lock or an end-to-end reproduction.
 
-## Revised Package Provenance
+## Runtime Prerequisites
 
-The revised code and tests come from commit
-`a0787c77e91b2271d29ceaad22fcf6d91e645158` of the superseded PR #4466.
-Only its README is rewritten here to identify the new directory and remove
-historical score attribution. Its execution files and tests are unchanged.
+The original snapshot is an export from an external experiment workspace,
+not a standalone distribution. Running it requires all of the following:
 
-The revised package adds the missing plain runner, removes unsupported legacy
-adapters, fixes task admission and revision pinning, serializes profile setup,
-propagates launcher failures, separates gateway ports, and changes retry and
-invalid-delivery termination behavior. These are execution changes, not just
-documentation edits. It remains distinct from any separate v2 benchmark.
+| Requirement | Original interface |
+| --- | --- |
+| Python environment | Python 3.11+, compatible `datacurve-pier`; archived launchers expect `.venv-user-395647/bin/python` |
+| LoopX source | A separate clean checkout of evaluated revision `2cef51d08b2a0103f4ba026bf47fd70dc8acee30`, selected with `MR_LOOPX_ROOT` |
+| Plain arm support | Original external `plain_appserver_runner.py` beside `goal_codex.py` |
+| Launch environment | External `run.sh` and its gateway, host-environment, and reporting dependencies |
+| Task selection | `goal30_subset.py`, `hard24_subset.py`, `remaining4_subset.py`, and `remaining59.txt` |
+| Task definitions | DeepSWE task definitions under `upstream/tasks/`, including independent verifier environments |
+| Container runtime | Docker, Compose, task images, and external `docker-compose-modelonly.yaml` |
+| Provider access | Separately configured gateway reachable from the task containers; sanitized loopback placeholders are not a complete deployment configuration |
 
-## Evidence Limits
+Assemble these inputs in a **new, isolated experiment workspace**, then place
+the archived files there without rewriting them. Keep the published archive
+unchanged, and do not overlay files into an ongoing benchmark workspace.
+Record the external dependency versions and hashes with that run. Credentials,
+raw task text, model configuration, and trajectories are intentionally absent
+from this public repository.
 
-No benchmark was rerun for this separation. Offline tests of the revised
-package cannot establish that historical v1 scores were produced by revised
-code. Keep future runs, receipts, and scores labeled with their actual harness
-version; do not mix output directories between these packages.
+The five documented selectors are `plain`, `goal`, `loopx-native`,
+`loopx-native-codex-cli`, and `loopx-native-heartbeat`. Legacy Claude and
+`MR_CODEX_ARM=loopx` paths are preserved as source history; they are not an
+additional supported reproduction claim.
 
-The [current SWE Marathon publication](swe-marathon/README.md) withdraws SSH Goal
-and Codex CLI data and conclusions pending revalidation. The unchanged v1
-README is retained as historical material, not as a renewed validated claim.
+## Known Limits
+
+Original defects remain visible: missing external support files, hard-coded
+environment assumptions, the remaining-59 launcher's 54-task admission mismatch,
+profile initialization races, and launcher/retry failure handling.
+These defects prevent a claim that the unchanged archive is fully runnable or
+that its admission receipts reliably validate every future run.
+Guaranteeing a clean end-to-end run requires separately reviewed execution
+changes and validation in the actual runtime environment; silently changing
+v1 to achieve that would invalidate the immutable snapshot boundary.
+
+The former revised package remains available in the previous PR commit
+`a8fa4f9cf842557ee11ba24056c46a1410763c8c`, outside the final PR file set.
+It is not the currently running new benchmark and has no attributed results.
+
+No benchmark was rerun for this PR. The
+[current SWE Marathon publication](swe-marathon/README.md) withdraws SSH Goal and
+Codex CLI data and conclusions pending revalidation. The unchanged historical
+v1 summary does not override that correction.
 
 ## 中文说明
 
-`deepswe-gptxhigh-v1` 保留最初提交的 14 个文件，内容及权限完全不变，
-包括原始 README；仅调整所在目录名。原始缺陷同样保留，不把后续修复混入历史快照。
+本 PR 仅保留旧 v1 原始代码及结果，已移出 `v1-revised`。
+原始 14 个文件的内容和权限不变；没有混入正在运行的新 benchmark 结果。
 
-`deepswe-gptxhigh-v1-revised` 单独保存后续执行逻辑修复和离线测试。
-修复涉及准入、启动、端口、并发、重试和退出行为，可能影响运行结果。
-该修订版没有重新跑 benchmark，也没有可归属给它的历史分数，不等同于 v2。
-原始结果中的撤回状态及外部环境依赖仍然适用。
+新增的归档检查命令只验证文件完整性、Python（含内嵌代码）及 Shell 语法，
+不调用模型、不执行任务，也不代表完整实验已跑通。运行仍需上表中的外部依赖，
+原始执行缺陷同样保留。不能在不改原逻辑、未验证真实环境的前提下保证端到端可执行。
