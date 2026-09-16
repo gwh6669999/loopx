@@ -19,6 +19,17 @@ def check_archive(archive: Path) -> dict:
     tree = bytearray()
     python_count = shell_count = embedded_count = 0
     for path in sorted(archive.iterdir(), key=lambda entry: entry.name.encode()):
+        # Match the repository's bytecode ignores without hiding extra source
+        # files or symlinks inside a directory named __pycache__.
+        if path.name == "__pycache__" and path.is_dir() and not path.is_symlink():
+            if any(
+                entry.is_symlink() or not entry.is_file() or entry.suffix != ".pyc"
+                for entry in path.iterdir()
+            ):
+                raise ValueError("unexpected non-bytecode entry in __pycache__")
+            continue
+        if path.suffix == ".pyc" and path.is_file() and not path.is_symlink():
+            continue
         if not path.is_file() or path.is_symlink():
             raise ValueError(f"unexpected archive entry: {path.name}")
         raw = path.read_bytes()

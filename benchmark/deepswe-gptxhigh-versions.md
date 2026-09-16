@@ -48,6 +48,12 @@ all Python files and the two embedded `_RUNNER` / `_BOOTSTRAP` constants, and ru
 `bash -n` on the launchers. It makes no model calls and does not run task code.
 Exit zero means those checks passed, **not that a complete benchmark ran**.
 The report explicitly records `standalone_runnable: false`.
+The repository's ignored Python bytecode (`*.pyc` and bytecode-only
+`__pycache__/` directories) is excluded from the identity check, so compilation
+by the premerge gate does not change the snapshot identity. Extra source files,
+non-bytecode cache entries, symlinks, and changes to archived bytes or executable
+modes still fail. `.gitattributes` pins the archive to LF line endings even when
+Git checks out other text files with `core.autocrlf=true`.
 Generated validator programs and Python inside shell heredocs are not separately
 compiled by this check; it does not claim exhaustive embedded-program coverage.
 
